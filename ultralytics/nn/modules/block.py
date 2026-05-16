@@ -70,23 +70,17 @@ class h_swish(nn.Module):
         return x * self.sigmoid(x)
 
 class CoordAtt(nn.Module):
-    def __init__(self, inp, oup, reduction=32, useAvgPool=True):
+    def __init__(self, inp, oup, reduction=32):
         super(CoordAtt, self).__init__()
-        # AvgPool (tetap ada)
         self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
         self.pool_w = nn.AdaptiveAvgPool2d((1, None))
-        # MaxPool
-        self.pool_h_max = nn.AdaptiveMaxPool2d((None, 1))
-        self.pool_w_max = nn.AdaptiveMaxPool2d((1, None))
-        
-        self.useAvgPool = useAvgPool
 
         mip = max(8, inp // reduction)
 
         self.conv1 = nn.Conv2d(inp, mip, kernel_size=1, stride=1, padding=0)
         self.bn1 = nn.BatchNorm2d(mip)
         self.act = h_swish()
-        
+
         self.conv_h = nn.Conv2d(mip, oup, kernel_size=1, stride=1, padding=0)
         self.conv_w = nn.Conv2d(mip, oup, kernel_size=1, stride=1, padding=0)
 
@@ -94,14 +88,45 @@ class CoordAtt(nn.Module):
         identity = x
         n, c, h, w = x.size()
 
-        if self.useAvgPool:
-            # Avg + Max sum
-            x_h = self.pool_h(x) + self.pool_h_max(x)
-            x_w = self.pool_w(x).permute(0, 1, 3, 2) + self.pool_w_max(x).permute(0, 1, 3, 2)
-        else:
-            # Max only
-            x_h = self.pool_h_max(x)
-            x_w = self.pool_w_max(x).permute(0, 1, 3, 2)
+        x_h = self.pool_h(x)
+        x_w = self.pool_w(x).permute(0, 1, 3, 2)
+
+        y = torch.cat([x_h, x_w], dim=2)
+        y = self.conv1(y)
+        y = self.bn1(y)
+        y = self.act(y)
+
+        x_h, x_w = torch.split(y, [h, w], dim=2)
+        x_w = x_w.permute(0, 1, 3, 2)
+
+        a_h = self.conv_h(x_h).sigmoid()
+        a_w = self.conv_w(x_w).sigmoid()
+
+        return identity * a_h * a_w
+    
+class CoordAttMax(nn.Module):
+    """CoordAtt dengan MaxPool — dipakai di SPPF."""
+    def __init__(self, inp, oup, reduction=32):
+        super(CoordAttMax, self).__init__()
+        # MaxPool saja, bukan AvgPool
+        self.pool_h = nn.AdaptiveMaxPool2d((None, 1))
+        self.pool_w = nn.AdaptiveMaxPool2d((1, None))
+
+        mip = max(8, inp // reduction)
+
+        self.conv1 = nn.Conv2d(inp, mip, kernel_size=1, stride=1, padding=0)
+        self.bn1 = nn.BatchNorm2d(mip)
+        self.act = h_swish()
+
+        self.conv_h = nn.Conv2d(mip, oup, kernel_size=1, stride=1, padding=0)
+        self.conv_w = nn.Conv2d(mip, oup, kernel_size=1, stride=1, padding=0)
+
+    def forward(self, x):
+        identity = x
+        n, c, h, w = x.size()
+
+        x_h = self.pool_h(x)
+        x_w = self.pool_w(x).permute(0, 1, 3, 2)
 
         y = torch.cat([x_h, x_w], dim=2)
         y = self.conv1(y)
@@ -275,31 +300,22 @@ class SPP(nn.Module):
 
 
 class SPPF(nn.Module):
-    """Spatial Pyramid Pooling - Fast (SPPF) layer for YOLOv5 by Glenn Jocher."""
+    """SPPF + CoordAttMax setelah pooling."""
 
-    def __init__(self, c1: int, c2: int, k: int = 5):
-        """
-        Initialize the SPPF layer with given input/output channels and kernel size.
-
-        Args:
-            c1 (int): Input channels.
-            c2 (int): Output channels.
-            k (int): Kernel size.
-
-        Notes:
-            This module is equivalent to SPP(k=(5, 9, 13)).
-        """
+    def __init__(self, c1: int, c2: int, k: int = 5, reduction: int = 16):
         super().__init__()
-        c_ = c1 // 2  # hidden channels
+        c_ = c1 // 2
         self.cv1 = Conv(c1, c_, 1, 1)
         self.cv2 = Conv(c_ * 4, c2, 1, 1)
         self.m = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
+        # CoordAttMax diterapkan setelah cv2
+        self.ca = CoordAttMax(c2, c2, reduction=reduction)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply sequential pooling operations to input and return concatenated feature maps."""
         y = [self.cv1(x)]
         y.extend(self.m(y[-1]) for _ in range(3))
-        return self.cv2(torch.cat(y, 1))
+        out = self.cv2(torch.cat(y, 1))
+        return self.ca(out)              # ← MaxPool CA di sini
 
 
 class C1(nn.Module):
@@ -376,21 +392,11 @@ class C2f(nn.Module):
         self.in_shortcut=in_shortcut
         self.att_type=att_type
 
-        if self.use_att and self.att_type == "CA":
+        if self.use_att and self.att_type=="CA":
             if self.in_shortcut:
-                self.ca = CoordAtt(
-                    inp=(2 + n) * self.c,
-                    oup=(2 + n) * self.c,
-                    reduction=reduction,
-                    useAvgPool=useAvgPool    
-                )
+                self.ca=CoordAtt(inp=(2 + n) * self.c,oup=(2 + n) * self.c,reduction=reduction)  # oup == (2 + n) * self.c
             else:
-                self.ca = CoordAtt(
-                    inp=c2,
-                    oup=c2,
-                    reduction=reduction,
-                    useAvgPool=useAvgPool    
-                )
+                self.ca=CoordAtt(inp=c2,oup=c2,reduction=reduction)  # oup == c2
         print("Param", c2,g,n,e,use_att,att_type,reduction,useAvgPool)   
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
