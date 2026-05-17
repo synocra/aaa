@@ -105,7 +105,6 @@ class CoordAtt(nn.Module):
         return identity * a_h * a_w
     
 class CoordAttMax(nn.Module):
-    """CoordAtt dengan MaxPool — dipakai di SPPF."""
     def __init__(self, inp, oup, reduction=32):
         super(CoordAttMax, self).__init__()
         # MaxPool saja, bukan AvgPool
@@ -128,6 +127,52 @@ class CoordAttMax(nn.Module):
         x_h = self.pool_h(x)
         x_w = self.pool_w(x).permute(0, 1, 3, 2)
 
+        y = torch.cat([x_h, x_w], dim=2)
+        y = self.conv1(y)
+        y = self.bn1(y)
+        y = self.act(y)
+
+        x_h, x_w = torch.split(y, [h, w], dim=2)
+        x_w = x_w.permute(0, 1, 3, 2)
+
+        a_h = self.conv_h(x_h).sigmoid()
+        a_w = self.conv_w(x_w).sigmoid()
+
+        return identity * a_h * a_w
+
+class CoordAttDual(nn.Module):
+    """
+    Coordinate Attention dengan dual pooling: (AdaptiveAvgPool2d + AdaptiveMaxPool2d) / 2.
+    Menggabungkan informasi mean (tekstur halus) dan peak (fitur dominan) secara seimbang.
+    """
+    def __init__(self, inp, oup, reduction=32):
+        super(CoordAttDual, self).__init__()
+        # Avg pool along H and W
+        self.pool_h_avg = nn.AdaptiveAvgPool2d((None, 1))
+        self.pool_w_avg = nn.AdaptiveAvgPool2d((1, None))
+        # Max pool along H and W
+        self.pool_h_max = nn.AdaptiveMaxPool2d((None, 1))
+        self.pool_w_max = nn.AdaptiveMaxPool2d((1, None))
+
+        mip = max(8, inp // reduction)
+
+        self.conv1 = nn.Conv2d(inp, mip, kernel_size=1, stride=1, padding=0)
+        self.bn1   = nn.BatchNorm2d(mip)
+        self.act   = h_swish()
+
+        self.conv_h = nn.Conv2d(mip, oup, kernel_size=1, stride=1, padding=0)
+        self.conv_w = nn.Conv2d(mip, oup, kernel_size=1, stride=1, padding=0)
+
+    def forward(self, x):
+        identity = x
+        n, c, h, w = x.size()
+
+        # Dual pool: rata-rata avg dan max di setiap arah
+        x_h = (self.pool_h_avg(x) + self.pool_h_max(x)) * 0.5          # [B, C, H, 1]
+        x_w = (self.pool_w_avg(x) + self.pool_w_max(x)) * 0.5          # [B, C, 1, W]
+        x_w = x_w.permute(0, 1, 3, 2)                                   # [B, C, W, 1]
+
+        # Concat along spatial dim → [B, C, H+W, 1]
         y = torch.cat([x_h, x_w], dim=2)
         y = self.conv1(y)
         y = self.bn1(y)
@@ -300,22 +345,22 @@ class SPP(nn.Module):
 
 
 class SPPF(nn.Module):
-    """SPPF + CoordAttMax setelah pooling."""
+    """SPPF + CoordAttDual (avg+max)/2 setelah pooling."""
 
     def __init__(self, c1: int, c2: int, k: int = 5, reduction: int = 16):
         super().__init__()
         c_ = c1 // 2
         self.cv1 = Conv(c1, c_, 1, 1)
         self.cv2 = Conv(c_ * 4, c2, 1, 1)
-        self.m = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
-        # CoordAttMax diterapkan setelah cv2
-        self.ca = CoordAttMax(c2, c2, reduction=reduction)
+        self.m   = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
+        # CoordAttDual diterapkan setelah cv2
+        self.ca  = CoordAttDual(c2, c2, reduction=reduction)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         y = [self.cv1(x)]
         y.extend(self.m(y[-1]) for _ in range(3))
         out = self.cv2(torch.cat(y, 1))
-        return self.ca(out)              # ← MaxPool CA di sini
+        return self.ca(out)              # ← Dual CA di sini
 
 
 class C1(nn.Module):
@@ -371,54 +416,71 @@ class C2(nn.Module):
 class C2f(nn.Module):
     """Faster Implementation of CSP Bottleneck with 2 convolutions."""
 
-    def __init__(self, c1: int, c2: int, n: int = 1, shortcut: bool = False, g: int = 1, e: float = 0.5,use_att:bool=False,reduction:int=16,useAvgPool:bool=False,in_shortcut:bool=False,att_type:str="CA_imp"):
-        """
-        Initialize a CSP bottleneck with 2 convolutions.
-
-        Args:
-            c1 (int): Input channels.
-            c2 (int): Output channels.
-            n (int): Number of Bottleneck blocks.
-            shortcut (bool): Whether to use shortcut connections.
-            g (int): Groups for convolutions.
-            e (float): Expansion ratio.
-        """
+    def __init__(
+        self,
+        c1: int,
+        c2: int,
+        n: int = 1,
+        shortcut: bool = False,
+        g: int = 1,
+        e: float = 0.5,
+        use_att: bool = False,
+        reduction: int = 16,
+        useAvgPool: bool = False,   # dipertahankan agar signature YAML tidak berubah
+        in_shortcut: bool = False,
+        att_type: str = "CA_imp",
+    ):
         super().__init__()
         self.c = int(c2 * e)  # hidden channels
         self.cv1 = Conv(c1, 2 * self.c, 1, 1)
-        self.cv2 = Conv((2 + n) * self.c, c2, 1)  # optional act=FReLU(c2)
-        self.m = nn.ModuleList(Bottleneck(self.c, self.c, shortcut, g, k=((3, 3), (3, 3)), e=1.0) for _ in range(n))
-        self.use_att=use_att
-        self.in_shortcut=in_shortcut
-        self.att_type=att_type
+        self.cv2 = Conv((2 + n) * self.c, c2, 1)
+        self.m   = nn.ModuleList(
+            Bottleneck(self.c, self.c, shortcut, g, k=((3, 3), (3, 3)), e=1.0)
+            for _ in range(n)
+        )
+        self.use_att    = use_att
+        self.in_shortcut = in_shortcut
+        self.att_type   = att_type
 
-        if self.use_att and self.att_type=="CA":
+        # CoordAttDual menggantikan CoordAtt / CoordAttMax
+        if self.use_att and self.att_type == "CA":
             if self.in_shortcut:
-                self.ca=CoordAtt(inp=(2 + n) * self.c,oup=(2 + n) * self.c,reduction=reduction)  # oup == (2 + n) * self.c
+                # CA diletakkan sebelum cv2 (di dalam shortcut)
+                self.ca = CoordAttDual(
+                    inp=(2 + n) * self.c,
+                    oup=(2 + n) * self.c,
+                    reduction=reduction,
+                )
             else:
-                self.ca=CoordAtt(inp=c2,oup=c2,reduction=reduction)  # oup == c2
-        print("Param", c2,g,n,e,use_att,att_type,reduction,useAvgPool)   
+                # CA diletakkan setelah cv2
+                self.ca = CoordAttDual(
+                    inp=c2,
+                    oup=c2,
+                    reduction=reduction,
+                )
+
+        print("Param", c2, g, n, e, use_att, att_type, reduction, useAvgPool)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass through C2f layer."""
-       
         y = list(self.cv1(x).chunk(2, 1))
         y.extend(m(y[-1]) for m in self.m)
-        
-        if self.use_att and self.att_type=="CA":
+
+        if self.use_att and self.att_type == "CA":
             if self.in_shortcut:
                 return self.cv2(self.ca(torch.cat(y, 1)))
             return self.ca(self.cv2(torch.cat(y, 1)))
+
         return self.cv2(torch.cat(y, 1))
 
     def forward_split(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass using split() instead of chunk()."""
-
-        y = self.cv1(x).split((self.c, self.c), 1)
-        y = [y[0], y[1]]
+        y = list(self.cv1(x).split((self.c, self.c), 1))
         y.extend(m(y[-1]) for m in self.m)
-        if self.use_att and self.att_type=="CA":
+
+        if self.use_att and self.att_type == "CA":
             return self.ca(self.cv2(torch.cat(y, 1)))
+
         return self.cv2(torch.cat(y, 1))
 
 
