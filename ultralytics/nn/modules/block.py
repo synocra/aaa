@@ -139,7 +139,7 @@ class CoordAttMax(nn.Module):
         a_w = self.conv_w(x_w).sigmoid()
 
         return identity * a_h * a_w
-
+    
 class CoordAttDual(nn.Module):
     """
     Coordinate Attention dengan dual pooling: (AdaptiveAvgPool2d + AdaptiveMaxPool2d) / 2.
@@ -345,22 +345,22 @@ class SPP(nn.Module):
 
 
 class SPPF(nn.Module):
-    """SPPF + CoordAttDual (avg+max)/2 setelah pooling."""
+    """SPPF + CoordAttMax setelah pooling."""
 
     def __init__(self, c1: int, c2: int, k: int = 5, reduction: int = 16):
         super().__init__()
         c_ = c1 // 2
         self.cv1 = Conv(c1, c_, 1, 1)
         self.cv2 = Conv(c_ * 4, c2, 1, 1)
-        self.m   = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
-        # CoordAttDual diterapkan setelah cv2
-        self.ca  = CoordAttDual(c2, c2, reduction=reduction)
+        self.m = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
+        # CoordAttMax diterapkan setelah cv2
+        self.ca = CoordAttMax(c2, c2, reduction=reduction)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         y = [self.cv1(x)]
         y.extend(self.m(y[-1]) for _ in range(3))
         out = self.cv2(torch.cat(y, 1))
-        return self.ca(out)              # ← Dual CA di sini
+        return self.ca(out)              # ← MaxPool CA di sini
 
 
 class C1(nn.Module):
