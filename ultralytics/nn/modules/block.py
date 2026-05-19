@@ -299,36 +299,22 @@ class SPP(nn.Module):
 
 
 class SPPF(nn.Module):
-    """Spatial Pyramid Pooling - Fast (SPPF) layer for YOLOv5 by Glenn Jocher."""
+    """SPPF + CoordAttMax setelah pooling."""
 
-    def __init__(self, c1: int, c2: int, k: int = 5, n: int = 3, shortcut: bool = False):
-        """Initialize the SPPF layer with given input/output channels and kernel size.
-
-        Args:
-            c1 (int): Input channels.
-            c2 (int): Output channels.
-            k (int): Kernel size.
-            n (int): Number of pooling iterations.
-            shortcut (bool): Whether to use shortcut connection.
-
-        Notes:
-            This module is equivalent to SPP(k=(5, 9, 13)).
-        """
+    def __init__(self, c1: int, c2: int, k: int = 5, reduction: int = 16):
         super().__init__()
-        c_ = c1 // 2  # hidden channels
-        self.cv1 = Conv(c1, c_, 1, 1, act=False)
-        self.cv2 = Conv(c_ * (n + 1), c2, 1, 1)
+        c_ = c1 // 2
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv2 = Conv(c_ * 4, c2, 1, 1)
         self.m = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
-        self.n = n
-        self.add = shortcut and c1 == c2
+        # CoordAttMax diterapkan setelah cv2
+        self.ca = CoordAttMax(c2, c2, reduction=reduction)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply sequential pooling operations to input and return concatenated feature maps."""
         y = [self.cv1(x)]
-        y.extend(self.m(y[-1]) for _ in range(getattr(self, "n", 3)))
-        y = self.cv2(torch.cat(y, 1))
-        return y + x if getattr(self, "add", False) else y
-
+        y.extend(self.m(y[-1]) for _ in range(3))
+        out = self.cv2(torch.cat(y, 1))
+        return self.ca(out)              # ← MaxPool CA di sini
 
 
 class C1(nn.Module):
@@ -384,8 +370,9 @@ class C2(nn.Module):
 class C2f(nn.Module):
     """Faster Implementation of CSP Bottleneck with 2 convolutions."""
 
-    def __init__(self, c1: int, c2: int, n: int = 1, shortcut: bool = False, g: int = 1, e: float = 0.5):
-        """Initialize a CSP bottleneck with 2 convolutions.
+    def __init__(self, c1: int, c2: int, n: int = 1, shortcut: bool = False, g: int = 1, e: float = 0.5,use_att:bool=False,reduction:int=16,useAvgPool:bool=False,in_shortcut:bool=False,att_type:str="CA_imp"):
+        """
+        Initialize a CSP bottleneck with 2 convolutions.
 
         Args:
             c1 (int): Input channels.
@@ -400,45 +387,38 @@ class C2f(nn.Module):
         self.cv1 = Conv(c1, 2 * self.c, 1, 1)
         self.cv2 = Conv((2 + n) * self.c, c2, 1)  # optional act=FReLU(c2)
         self.m = nn.ModuleList(Bottleneck(self.c, self.c, shortcut, g, k=((3, 3), (3, 3)), e=1.0) for _ in range(n))
+        self.use_att=use_att
+        self.in_shortcut=in_shortcut
+        self.att_type=att_type
+
+        if self.use_att and self.att_type=="CA":
+            if self.in_shortcut:
+                self.ca=CoordAtt(inp=(2 + n) * self.c,oup=(2 + n) * self.c,reduction=reduction)  # oup == (2 + n) * self.c
+            else:
+                self.ca=CoordAtt(inp=c2,oup=c2,reduction=reduction)  # oup == c2
+        print("Param", c2,g,n,e,use_att,att_type,reduction,useAvgPool)   
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass through C2f layer."""
+       
         y = list(self.cv1(x).chunk(2, 1))
         y.extend(m(y[-1]) for m in self.m)
+        
+        if self.use_att and self.att_type=="CA":
+            if self.in_shortcut:
+                return self.cv2(self.ca(torch.cat(y, 1)))
+            return self.ca(self.cv2(torch.cat(y, 1)))
         return self.cv2(torch.cat(y, 1))
 
     def forward_split(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass using split() instead of chunk()."""
+
         y = self.cv1(x).split((self.c, self.c), 1)
         y = [y[0], y[1]]
         y.extend(m(y[-1]) for m in self.m)
+        if self.use_att and self.att_type=="CA":
+            return self.ca(self.cv2(torch.cat(y, 1)))
         return self.cv2(torch.cat(y, 1))
-
-
-class C3(nn.Module):
-    """CSP Bottleneck with 3 convolutions."""
-
-    def __init__(self, c1: int, c2: int, n: int = 1, shortcut: bool = True, g: int = 1, e: float = 0.5):
-        """Initialize the CSP Bottleneck with 3 convolutions.
-
-        Args:
-            c1 (int): Input channels.
-            c2 (int): Output channels.
-            n (int): Number of Bottleneck blocks.
-            shortcut (bool): Whether to use shortcut connections.
-            g (int): Groups for convolutions.
-            e (float): Expansion ratio.
-        """
-        super().__init__()
-        c_ = int(c2 * e)  # hidden channels
-        self.cv1 = Conv(c1, c_, 1, 1)
-        self.cv2 = Conv(c1, c_, 1, 1)
-        self.cv3 = Conv(2 * c_, c2, 1)  # optional act=FReLU(c2)
-        self.m = nn.Sequential(*(Bottleneck(c_, c_, shortcut, g, k=((1, 1), (3, 3)), e=1.0) for _ in range(n)))
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass through the CSP bottleneck with 3 convolutions."""
-        return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), 1))
 
 
 class C3(nn.Module):
@@ -1229,11 +1209,17 @@ class C3k2(C2f):
         n: int = 1,
         c3k: bool = False,
         e: float = 0.5,
-        attn: bool = False,
         g: int = 1,
-        shortcut: bool = True,
+        shortcut: bool = False,
+        use_att: bool = False,
+        reduction: int = 16,
+        useAvgPool: bool = False,
+        in_shortcut: bool = False,
+        att_type: str = "CA_imp"
     ):
-        """Initialize C3k2 module.
+    
+        """
+        Initialize C3k2 module.
 
         Args:
             c1 (int): Input channels.
@@ -1241,21 +1227,12 @@ class C3k2(C2f):
             n (int): Number of blocks.
             c3k (bool): Whether to use C3k blocks.
             e (float): Expansion ratio.
-            attn (bool): Whether to use attention blocks.
             g (int): Groups for convolutions.
             shortcut (bool): Whether to use shortcut connections.
         """
-        super().__init__(c1, c2, n, shortcut, g, e)
+        super().__init__(c1, c2, n, shortcut, g, e, use_att, reduction, useAvgPool, in_shortcut, att_type)
         self.m = nn.ModuleList(
-            nn.Sequential(
-                Bottleneck(self.c, self.c, shortcut, g),
-                PSABlock(self.c, attn_ratio=0.5, num_heads=max(self.c // 64, 1)),
-            )
-            if attn
-            else C3k(self.c, self.c, 2, shortcut, g)
-            if c3k
-            else Bottleneck(self.c, self.c, shortcut, g)
-            for _ in range(n)
+            C3k(self.c, self.c, 2, shortcut, g) if c3k else Bottleneck(self.c, self.c, shortcut, g) for _ in range(n)
         )
 
 
