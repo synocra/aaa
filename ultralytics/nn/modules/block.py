@@ -298,21 +298,20 @@ class SPP(nn.Module):
         return self.cv2(torch.cat([x] + [m(x) for m in self.m], 1))
 
 
-class SPPF(nn.Module):
-    def __init__(self, c1: int, c2: int, k: int = 5, reduction: int = 16):
-        super().__init__()
-        c_ = c1 // 2
-        self.cv1 = Conv(c1, c_, 1, 1)
-        self.cv2 = Conv(c_ * 4, c2, 1, 1)
-        self.m = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
-        self.ca = CoordAttMax(c2, c2, reduction=reduction)
-        self.use_att = False  # ← toggle di sini
+def __init__(self, c1, c2, k=5, reduction=16, use_att=False):
+    super().__init__()
+    c_ = c1 // 2
+    self.cv1 = Conv(c1, c_, 1, 1)
+    self.cv2 = Conv(c_ * 4, c2, 1, 1)
+    self.m = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
+    self.use_att = use_att          # ← tambah ini
+    self.ca = CoordAttMax(c2, c2, reduction=reduction)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        y = [self.cv1(x)]
-        y.extend(self.m(y[-1]) for _ in range(3))
-        out = self.cv2(torch.cat(y, 1))
-        return self.ca(out) if self.use_att else out  # ← CA skip
+def forward(self, x):
+    y = [self.cv1(x)]
+    y.extend(self.m(y[-1]) for _ in range(3))
+    out = self.cv2(torch.cat(y, 1))
+    return self.ca(out) if self.use_att else out  # ← guard ini
 
 
 class C1(nn.Module):
