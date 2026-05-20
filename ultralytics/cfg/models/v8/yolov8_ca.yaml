@@ -14,7 +14,7 @@ scales: # model compound scaling constants, i.e. 'model=yolov8n.yaml' will call 
   l: [1.00, 1.00, 512] # YOLOv8l summary: 209 layers, 43691520 parameters, 43691504 gradients, 165.7 GFLOPS
   x: [1.00, 1.25, 512] # YOLOv8x summary: 209 layers, 68229648 parameters, 68229632 gradients, 258.5 GFLOPS
 
-# YOLOv8.0n backbone
+# backbone
 backbone:
   # [from, repeats, module, args]
   - [-1, 1, Conv, [64, 3, 2]] # 0-P1/2
@@ -26,9 +26,9 @@ backbone:
   - [-1, 6, C2f, [512, True]]
   - [-1, 1, Conv, [1024, 3, 2]] # 7-P5/32
   - [-1, 3, C2f, [1024, True]]
-  - [-1, 1, SPPF, [1024, 5, 16]] # 9
+  - [-1, 1, SPPF, [1024, 5]] # 9
 
-# YOLOv8.0n head
+# head
 head:
   - [-1, 1, nn.Upsample, [None, 2, "nearest"]]
   - [[-1, 6], 1, Concat, [1]] # cat backbone P4
@@ -40,10 +40,12 @@ head:
 
   - [-1, 1, Conv, [256, 3, 2]]
   - [[-1, 12], 1, Concat, [1]] # cat head P4
-  - [-1, 3, C2f, [512, False, 1, 0.5, True, 16, True, False, "CA"]] # 18 (P4/16-medium)
+  # MODIFIKASI LAYER 18 (P4/16-medium): Ditambahkan CoordAtt + in_shortcut=True
+  - [-1, 3, C2f, [512, False, 1, 0.5, True, 16, False, True, "CA"]] # 18 (P4/16-medium)
 
   - [-1, 1, Conv, [512, 3, 2]]
   - [[-1, 9], 1, Concat, [1]] # cat head P5
-  - [-1, 3, C2f, [1024, True, 1, 0.5, True, 16, True, False, "CA"]] # 21 (P5/32-large)
+  # MODIFIKASI LAYER 21 (P5/32-large): Ditambahkan CoordAtt + in_shortcut=True
+  - [-1, 3, C2f, [1024, False, 1, 0.5, True, 16, False, True, "CA"]] # 21 (P5/32-large)
 
   - [[15, 18, 21], 1, Detect, [nc]] # Detect(P3, P4, P5)
