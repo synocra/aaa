@@ -299,22 +299,38 @@ class SPP(nn.Module):
 
 
 class SPPF(nn.Module):
-    """SPPF + CoordAttMax setelah pooling."""
+    """Spatial Pyramid Pooling - Fast (SPPF) layer for YOLO with optional Attention."""
 
-    def __init__(self, c1: int, c2: int, k: int = 5, reduction: int = 16):
+    def __init__(self, c1: int, c2: int, k: int = 5, use_att: bool = False, reduction: int = 16):
+        """
+        Initialize SPPF layer.
+        
+        Args:
+            c1 (int): Input channels.
+            c2 (int): Output channels.
+            k (int): Kernel size for max pooling.
+            use_att (bool): Toggle for CoordAttMax attention.
+            reduction (int): Reduction ratio for CoordAttMax.
+        """
         super().__init__()
-        c_ = c1 // 2
+        c_ = c1 // 2  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
         self.cv2 = Conv(c_ * 4, c2, 1, 1)
         self.m = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
-        # CoordAttMax diterapkan setelah cv2
-        self.ca = CoordAttMax(c2, c2, reduction=reduction)
+        
+        self.use_att = use_att
+        if self.use_att:
+            self.ca = CoordAttMax(c2, c2, reduction=reduction)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply sequential pooling operations to input and return concatenated feature maps."""
         y = [self.cv1(x)]
         y.extend(self.m(y[-1]) for _ in range(3))
         out = self.cv2(torch.cat(y, 1))
-        return self.ca(out)              # ← MaxPool CA di sini
+        
+        if self.use_att:
+            return self.ca(out)
+        return out
 
 
 class C1(nn.Module):
