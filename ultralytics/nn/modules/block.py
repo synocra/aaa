@@ -370,7 +370,7 @@ class C2(nn.Module):
 class C2f(nn.Module):
     """Faster Implementation of CSP Bottleneck with 2 convolutions."""
 
-    def __init__(self, c1: int, c2: int, n: int = 1, shortcut: bool = False, g: int = 1, e: float = 0.5,use_att:bool=False,reduction:int=16,useAvgPool:bool=False,in_shortcut:bool=False,att_type:str="CA_imp"):
+    def __init__(self, c1: int, c2: int, n: int = 1, shortcut: bool = True, g: int = 1, e: float = 0.5,use_att:bool=False,reduction:int=16,useAvgPool:bool=False,in_shortcut:bool=False,att_type:str="CA_imp"):
         """
         Initialize a CSP bottleneck with 2 convolutions.
 
@@ -1210,7 +1210,7 @@ class C3k2(C2f):
         c3k: bool = False,
         e: float = 0.5,
         g: int = 1,
-        shortcut: bool = False,
+        shortcut: bool = True,
         use_att: bool = False,
         reduction: int = 16,
         useAvgPool: bool = False,
