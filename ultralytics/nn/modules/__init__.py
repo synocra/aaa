@@ -31,8 +31,6 @@ from .block import (
     SPPELAN,
     SPPF,
     A2C2f,
-    CoordAtt,
-    CoordAttMax,
     AConv,
     ADown,
     Attention,
@@ -181,6 +179,4 @@ __all__ = (
     "TorchVision",
     "Index",
     "A2C2f",
-    "CoordAttMax",
-    "CoordAtt",
 )
