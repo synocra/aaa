@@ -299,21 +299,38 @@ class SPP(nn.Module):
 
 
 class SPPF(nn.Module):
-    def __init__(self, c1: int, c2: int, k: int = 5, reduction: int = 16, use_att: bool = False):
+    """Spatial Pyramid Pooling - Fast (SPPF) layer for YOLO with optional Attention."""
+
+    def __init__(self, c1: int, c2: int, k: int = 5, use_att: bool = False, reduction: int = 16):
+        """
+        Initialize SPPF layer.
+        
+        Args:
+            c1 (int): Input channels.
+            c2 (int): Output channels.
+            k (int): Kernel size for max pooling.
+            use_att (bool): Toggle for CoordAttMax attention.
+            reduction (int): Reduction ratio for CoordAttMax.
+        """
         super().__init__()
-        c_ = c1 // 2
+        c_ = c1 // 2  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
         self.cv2 = Conv(c_ * 4, c2, 1, 1)
         self.m = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
+        
         self.use_att = use_att
         if self.use_att:
             self.ca = CoordAttMax(c2, c2, reduction=reduction)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply sequential pooling operations to input and return concatenated feature maps."""
         y = [self.cv1(x)]
         y.extend(self.m(y[-1]) for _ in range(3))
         out = self.cv2(torch.cat(y, 1))
-        return self.ca(out) if self.use_att else out
+        
+        if self.use_att:
+            return self.ca(out)
+        return out
 
 
 class C1(nn.Module):
@@ -369,7 +386,7 @@ class C2(nn.Module):
 class C2f(nn.Module):
     """Faster Implementation of CSP Bottleneck with 2 convolutions."""
 
-    def __init__(self, c1: int, c2: int, n: int = 1, shortcut: bool = False, g: int = 1, e: float = 0.5,use_att:bool=False,reduction:int=16,useAvgPool:bool=False,in_shortcut:bool=False,att_type:str="CA_imp"):
+    def __init__(self, c1: int, c2: int, n: int = 1, shortcut: bool = True, g: int = 1, e: float = 0.5,use_att:bool=False,reduction:int=16,useAvgPool:bool=False,in_shortcut:bool=False,att_type:str="CA_imp"):
         """
         Initialize a CSP bottleneck with 2 convolutions.
 
@@ -1209,7 +1226,7 @@ class C3k2(C2f):
         c3k: bool = False,
         e: float = 0.5,
         g: int = 1,
-        shortcut: bool = False,
+        shortcut: bool = True,
         use_att: bool = False,
         reduction: int = 16,
         useAvgPool: bool = False,
