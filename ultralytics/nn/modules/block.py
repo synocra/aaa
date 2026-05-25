@@ -55,21 +55,21 @@ __all__ = (
     "TorchVision",
 )
 
-class h_sigmoid(nn.Module):
+class h_sigmoid(nn.Module): # Aproksimasi Sigmoid yang ringan komputasinya untuk menghasilkan bobot attention (0 sampai 1).
     def __init__(self, inplace=True):
         super(h_sigmoid, self).__init__()
         self.relu = nn.ReLU6(inplace=inplace)
     def forward(self, x):
         return self.relu(x + 3) / 6
 
-class h_swish(nn.Module):
+class h_swish(nn.Module): # Fungsi aktivasi turunan Swish yang lebih cepat dihitung untuk menggantikan ReLU tanpa mengorbankan akurasi.
     def __init__(self, inplace=True):
         super(h_swish, self).__init__()
         self.sigmoid = h_sigmoid(inplace=inplace)
     def forward(self, x):
         return x * self.sigmoid(x)
 
-class CoordAtt(nn.Module):
+class CoordAtt(nn.Module): #Penambahan koordinat attention untuk meningkatkan representasi spasial dan kanal dalam jaringan saraf, memungkinkan model untuk fokus pada fitur yang lebih relevan.
     def __init__(self, inp, oup, reduction=32):
         super(CoordAtt, self).__init__()
         self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
@@ -104,7 +104,7 @@ class CoordAtt(nn.Module):
 
         return identity * a_h * a_w
     
-class CoordAttMax(nn.Module):
+class CoordAttMax(nn.Module): # Modifikasi dari CoordAtt dengan menggunakan MaxPool untuk menangkap fitur yang lebih kuat dan menonjol, memungkinkan model untuk fokus pada fitur yang paling relevan dalam gambar.
     def __init__(self, inp, oup, reduction=32):
         super(CoordAttMax, self).__init__()
         # MaxPool saja, bukan AvgPool
@@ -367,10 +367,10 @@ class C2(nn.Module):
         return self.cv2(torch.cat((self.m(a), b), 1))
 
 
-class C2f(nn.Module):
+class C2f(nn.Module): #Penambahan parameter baru untuk mengontrol Coordinate Attention dan kondisi if-else Coordinate Attention menyala pada C2f sebagai Parent Class dari C3k2.
     """Faster Implementation of CSP Bottleneck with 2 convolutions."""
 
-    def __init__(self, c1: int, c2: int, n: int = 1, shortcut: bool = False, g: int = 1, e: float = 0.5,use_att:bool=False,reduction:int=16,useAvgPool:bool=False,in_shortcut:bool=False,att_type:str="CA_imp"):
+    def __init__(self, c1: int, c2: int, n: int = 1, shortcut: bool = False, g: int = 1, e: float = 0.5,use_att:bool=False,reduction:int=16,useAvgPool:bool=False,in_shortcut:bool=False,att_type:str="CA"):
         """
         Initialize a CSP bottleneck with 2 convolutions.
 
@@ -1199,7 +1199,7 @@ class C3f(nn.Module):
         return self.cv3(torch.cat(y, 1))
 
 
-class C3k2(C2f):
+class C3k2(C2f): #Modifikasi C3k2 dengan menambah parameter baru untuk mengontrol Coordinate Attention
     """Faster Implementation of CSP Bottleneck with 2 convolutions."""
 
     def __init__(
@@ -1215,7 +1215,7 @@ class C3k2(C2f):
         reduction: int = 16,
         useAvgPool: bool = False,
         in_shortcut: bool = False,
-        att_type: str = "CA_imp"
+        att_type: str = "CA"
     ):
     
         """
