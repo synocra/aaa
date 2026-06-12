@@ -299,22 +299,29 @@ class SPP(nn.Module):
 
 
 class SPPF(nn.Module):
-    """SPPF + CoordAttMax setelah pooling (opsional)."""
-
+    """
+    SPPF + Coordinate Attention
+    """
     def __init__(self, c1: int, c2: int, k: int = 5, reduction: int = 16, use_ca: bool = False):
         super().__init__()
         c_ = c1 // 2
         self.cv1 = Conv(c1, c_, 1, 1)
         self.cv2 = Conv(c_ * 4, c2, 1, 1)
-        self.m = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
+        self.m = nn.MaxPool2d(
+            kernel_size=k,
+            stride=1,
+            padding=k // 2
+        )
         self.use_ca = use_ca
-        self.ca = CoordAttMax(c2, c2, reduction=reduction) if use_ca else None
+        self.ca = CoordAtt(c2, c2, reduction=reduction) if use_ca else None
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         y = [self.cv1(x)]
         y.extend(self.m(y[-1]) for _ in range(3))
-        out = self.cv2(torch.cat(y, 1))
-        return self.ca(out) if self.use_ca else out
+        out = self.cv2(torch.cat(y, dim=1))
+        if self.use_ca:
+            out = self.ca(out)
+        return out
 
 
 class C1(nn.Module):
