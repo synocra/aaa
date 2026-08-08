@@ -299,22 +299,42 @@ class SPP(nn.Module):
 
 
 class SPPF(nn.Module):
-    """SPPF + CoordAttMax setelah pooling (opsional)."""
-
-    def __init__(self, c1: int, c2: int, k: int = 5, reduction: int = 16, use_ca: bool = False):
+    def __init__(
+        self,
+        c1: int,
+        c2: int,
+        k: int = 5,
+        reduction: int = 16,
+        att_type: str = "none"
+    ):
         super().__init__()
         c_ = c1 // 2
         self.cv1 = Conv(c1, c_, 1, 1)
         self.cv2 = Conv(c_ * 4, c2, 1, 1)
-        self.m = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
-        self.use_ca = use_ca
-        self.ca = CoordAttMax(c2, c2, reduction=reduction) if use_ca else None
+        self.m = nn.MaxPool2d(kernel_size=k,stride=1,padding=k // 2)
+        self.att_type = att_type.lower()
+        if self.att_type == "max":
+            self.ca = CoordAttMax(c2,c2,reduction=reduction)
+        elif self.att_type == "avg":
+            self.ca = CoordAtt(c2,c2,reduction=reduction)
+        else: 
+            self.ca = None
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        y = [self.cv1(x)]
-        y.extend(self.m(y[-1]) for _ in range(3))
-        out = self.cv2(torch.cat(y, 1))
-        return self.ca(out) if self.use_ca else out
+    def forward(self, x):
+        x = self.cv1(x)
+        y1 = self.m(x)
+        y2 = self.m(y1)
+        y3 = self.m(y2)
+
+        out = self.cv2(
+            torch.cat(
+                [x, y1, y2, y3],
+                dim=1
+            )
+        )
+        if self.ca is not None:
+            out = self.ca(out)
+        return out
 
 
 class C1(nn.Module):
@@ -393,9 +413,9 @@ class C2f(nn.Module): #Penambahan parameter baru untuk mengontrol Coordinate Att
 
         if self.use_att and self.att_type=="CA":
             if self.in_shortcut:
-                self.ca=CoordAtt(inp=(2 + n) * self.c,oup=(2 + n) * self.c,reduction=reduction)  # oup == (2 + n) * self.c
+                self.ca=CoordAtt(inp=(2 + n) * self.c,oup=(2 + n) * self.c,reduction=reduction)
             else:
-                self.ca=CoordAtt(inp=c2,oup=c2,reduction=reduction)  # oup == c2
+                self.ca=CoordAtt(inp=c2,oup=c2,reduction=reduction)
         print("Param", c2,g,n,e,use_att,att_type,reduction,useAvgPool)   
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
